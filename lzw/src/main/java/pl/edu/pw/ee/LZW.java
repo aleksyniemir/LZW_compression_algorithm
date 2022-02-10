@@ -1,24 +1,31 @@
 package pl.edu.pw.ee;
 
+import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.DataOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.io.OutputStream;
 import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Objects;
 
 
 public class LZW {
 
     String pathToDir;
-    ArrayList<String> dictionary;
+    HashMap<DictKey, Integer> dictionary;
     Integer[] text;
+    int freePosition = 256;
 
     public LZW(String pathToDir) {
         if (pathToDir == null || pathToDir.isEmpty()) {
@@ -28,82 +35,28 @@ public class LZW {
     }
 
     public void compress() {
-        String pathToFile = pathToDir + "decompressedFile.txt";
-        this.text = readDecompressedFile(pathToFile);
-        initializeDictionaryFromIntegers();
-        byte[] dictionaryBytes = dictionaryIntoBytes();
-        writeBytes(dictionaryBytes, "DICTIONARY");
+        this.text = readDecompressedFile();
+        initializeDictionary();
+        dictionaryBytes();
         ArrayList<Integer> output = LZWCompressingAlgorithm();
-        byte[] outputBytes = outputIntoBytes(output);
-        writeBytes(outputBytes, "OUTPUT");
+        writeOutputIntoBytes(output);
     }
 
     public void decompress() {
-        byte[] dictionaryBytes = readBytes("DICTIONARY");
-        initializeDictionaryFromBytes(dictionaryBytes);
-        byte[] inputBytes = readBytes("INPUT");
-        int[] input =  bytesIntoIntegers(inputBytes);
-        String[] output = LZWDecompressingAlgorithm(input);
-        String finalString = integerIntoString(output);
-        writeFinalString(finalString);
+            initializeDictionary();
+            int [] input = readFile();   
+            String finalString = LZWDecompressingAlgorithm(input);
+            writeFinalString(finalString);
     }
 
-    private String[] LZWDecompressingAlgorithm(int[] input) {
-        ArrayList<String> textList = new ArrayList<>();
-        int currentWordId, prevWordId;
-        String currentWord, prevWord, combined;
-        prevWordId = input[0];
-        prevWord = dictionary.get(prevWordId);
-        textList.add(prevWord);
-        for (int i = 1; i < input.length; i++) {
-            currentWordId = input[i];
-            if (dictionary.size() >= currentWordId) {
-                currentWord = dictionary.get(currentWordId);
-                prevWord = dictionary.get(prevWordId);
-                combined = prevWord + " " + currentWord;
-                dictionary.add(combined);
-                textList.add(currentWord);
-            } else {
-                prevWord = dictionary.get(prevWordId);
-                combined = prevWord;
-                textList.add(combined);
-            }
-            prevWordId = currentWordId;
-        }
-        String[] text = new String[input.length];
-        for (int i = 0; i < textList.size(); i++) {
-            text[i] = textList.get(i);
-        }
-        return text;
-    }
-
-    private ArrayList<Integer> LZWCompressingAlgorithm() {
-        String current, prev, combined;
-        ArrayList<Integer> output = new ArrayList<>();
-        current = Integer.toString(text[0]);
-        prev = current;
-        for (int i = 1; i < text.length; i++) {
-            current = Integer.toString(text[i]);
-            combined = prev + " " + current;
-            if (dictionary.contains(combined)) {
-                prev = prev + " " + current;
-            } else {
-                dictionary.add(combined);
-                output.add(dictionary.indexOf(prev));
-                prev = current;
-            }
-        }
-        output.add(dictionary.indexOf(prev));
-        return output;
-    }
-
-    private Integer[] readDecompressedFile(String pathToDecompressedFile) {
+    private Integer[] readDecompressedFile() {
         try {
-            File file = new File(pathToDecompressedFile);
+            String path = pathToDir + "decompressedFile.txt";
+            File file = new File(path);
             if (!file.exists() || file.isDirectory()) {
                 throw new IllegalArgumentException("The file must exists/path cannot lead to a directory!");
             }
-            BufferedReader reader = new BufferedReader(new InputStreamReader(new FileInputStream(file)));
+            BufferedReader reader = new BufferedReader(new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8));
             int n = 0, c;
             while((c = reader.read()) != -1) {
                 n++;
@@ -124,97 +77,183 @@ public class LZW {
         }
     }
 
-    private void writeBytes(byte[] bytes, String string) {
-        File file;
-        if (string.equals("DICTIONARY")) {
-            file = new File(pathToDir + "dictionary.txt");
-        } else if (string.equals("OUTPUT")) {
-            file = new File(pathToDir + "compressedFile.txt");
-        } else {
-            throw new IllegalArgumentException("Method should be called with an argument DICTIONARY or INPUT");
+    private void initializeDictionary() {
+        this.dictionary = new HashMap<DictKey, Integer>();
+        for (int i = 0; i < 256; i++) {
+            dictionary.put(new DictKey(-1, (byte) i), i);
         }
-        try (OutputStream os = new FileOutputStream(file)) {
-            os.write(bytes);
+        
+    }
+
+    private void dictionaryBytes() {
+        byte[] buffer = new byte[3];
+        boolean onLeft = true;
+        File file = new File(pathToDir + "dictionary.txt");
+        try (DataOutputStream os = new DataOutputStream(new BufferedOutputStream(new FileOutputStream(file)))) {
+            for (int i = 0; i < dictionary.size(); i++) {
+                int value = dictionary.get(new DictKey(i, (byte) 0));
+                String valueInBites = new String();
+                while (value > 0) {
+                    if (value % 2 == 1) {
+                        valueInBites = "1" + valueInBites;
+                    } else {
+                        valueInBites = "0" + valueInBites;
+                    }
+                    value = value / 2;
+                }
+                while (valueInBites.length() < 12) {
+                    valueInBites = "0" + valueInBites;
+                }
+                if (onLeft) {
+                    buffer[0] = (byte) Integer.parseInt(valueInBites.substring(0, 8), 2);
+                    buffer[1] = (byte) Integer.parseInt(valueInBites.substring(8, 12) + "0000", 2);
+                } else {
+                    buffer[1] += (byte) Integer.parseInt(valueInBites.substring(0, 4), 2);
+                    buffer[2] = (byte) Integer.parseInt(valueInBites.substring(4, 12), 2);
+                }
+                if (!onLeft || (dictionary.size() % 2 == 1 && i == dictionary.size() - 1)) {
+                    for (int j = 0; j < buffer.length; j++) {
+                        os.writeByte(buffer[j]);
+                        buffer[j] = 0;
+                    }
+                }
+                onLeft = !onLeft;
+            }
         } catch (Exception e) {
-            System.out.println("Exception: " + e);
+            System.out.println("Exception " + e );
         }
     }
 
-    private byte[] readBytes(String string) {
-        try { 
-            Path path;
-            if (string.equals("DICTIONARY")) {
-                path = Paths.get(pathToDir + "dictionary.txt");
-            } else if (string.equals("INPUT")) {
-                path = Paths.get(pathToDir + "compressedFile.txt");
+    private ArrayList<Integer> LZWCompressingAlgorithm() {
+        ArrayList<Integer> output = new ArrayList<>();
+        DictKey combined, prev;
+        int value = text[0];
+        byte current,  by = (byte) value;
+        int prevId = dictionary.get(new DictKey(-1, by)); 
+        for (int i = 1; i < text.length; i++) {
+            value = text[i];
+            current = (byte) value;
+            combined = new DictKey(prevId, current);
+            if (dictionary.containsKey(combined)) {
+                prevId = dictionary.get(combined);
             } else {
-                throw new IllegalArgumentException("Method should be called with an argument DICTIONARY or INPUT");
+                dictionary.put(combined, freePosition);
+                freePosition++;
+                output.add(prevId);
+                prev = new DictKey(-1, current);
+                prevId = dictionary.get(prev);
             }
-            byte[] bytes = Files.readAllBytes(path);
-            return bytes;
+        }
+        output.add(prevId);
+        return output;
+    }
+    
+    private void writeOutputIntoBytes(ArrayList<Integer> output) {
+        File file = new File(pathToDir + "compressedFile.txt");
+        try (BufferedWriter os = new BufferedWriter(new FileWriter(file))) {
+            for (int i = 0; i < output.size(); i++) {
+                int value = output.get(i);
+                String valueInBites = new String();
+                while (value > 0) {
+                    if (value % 2 == 1) {
+                        valueInBites = "1" + valueInBites;
+                    } else {
+                        valueInBites = "0" + valueInBites;7
+                    }
+                    value = value / 2;
+                }
+                while (valueInBites.length() < 12) {
+                    valueInBites = "0" + valueInBites;
+                }
+                os.write(valueInBites);
+            }
+        } catch (Exception e) {
+            
+        }
+    }
+    
+    private int[] readFile() {
+        try { 
+            Path path = Paths.get(pathToDir + "compressedFile.txt");
+            String str = Files.readString(path);
+            int[] values = new int[str.length() / 12];
+            for (int i = 0; i < values.length; i++) {
+                String temp;
+                int value  = 0;
+                temp = str.substring(0 + 12 * i , 12 + 12 * i);
+                for (int j = 0; j < 12; j++) {
+                    value += temp.charAt(j) == '0' ? 0 : Math.pow(2, 11 - j);
+                }
+                values[i] = value;
+            }
+            return values;
         } catch (IOException e) {
             System.out.println("Exception: " + e);
             return null;
         }
     }
 
-    private void initializeDictionaryFromIntegers() {
-        this.dictionary = new ArrayList<>();
-        for (int i = 0; i < text.length; i++) {
-            if (!dictionary.contains(Integer.toString(text[i]))) {
-                dictionary.add(Integer.toString(text[i]));
-            }
-        }
-    }
-
-    private void initializeDictionaryFromBytes(byte[] bytes) {
-        this.dictionary = new ArrayList<>();
-        for (int i = 0; i < bytes.length; i++) {
-            int value = (int) bytes[i];
-            dictionary.add(Integer.toString(value));
-        }
-    }
-
-    private byte[] dictionaryIntoBytes() {
-        byte[] bytes = new byte[dictionary.size()];
-        for (int i = 0; i < bytes.length; i++) {
-            int value = Integer.parseInt(dictionary.get(i));
-            bytes[i] = (byte) value;
-        }
-        return bytes;
-    }
-
-    private byte[] outputIntoBytes(ArrayList<Integer> output) {
-        byte[] bytes = new byte[output.size()];
-        for (int i = 0; i < output.size(); i++) {
-            int value = output.get(i);
-            bytes[i] = (byte) value;
-        }
-        return bytes;
-    }
-
-    private int[] bytesIntoIntegers(byte[] bytes)  {
-        int[] table = new int[bytes.length];
-        for (int i = 0; i < bytes.length; i++) {
-            int value = (int) bytes[i];
-            while (value < 0) {
-                value += 256;
-            }
-            table[i] = value;
-        }
-        return table;
-    }
-
-    private String integerIntoString(String[] strings) {
-        String finalString = new String();
-        for (int i = 0; i < strings.length; i++) {
-            String[] string = strings[i].split("\\s+");
-            for (int j = 0; j < string.length; j++) {
-                int value = Integer.parseInt(string[j]);
-                finalString = finalString + (char) value; 
+    private String LZWDecompressingAlgorithm(int[] input) {
+        String finalString = "";
+        int prevWordId = input[0];
+        int currentWordId;
+        char prevWord = (char) prevWordId;
+        finalString += (char) prevWord;
+        for (int i = 1; i < input.length; i++) {
+            currentWordId = input[i];
+            if (dictionary.containsValue(currentWordId)) {
+                finalString += getWord(currentWordId);
+                dictionary.put(new DictKey(prevWordId, (byte) getFirstByte(currentWordId)), freePosition);
+                freePosition++;
+                prevWordId = currentWordId;
+            } else {
+                finalString += getWord(prevWordId) + getFirstByte(prevWordId);
+                dictionary.put(new DictKey(prevWordId,  (byte) getFirstByte(currentWordId)), freePosition);
+                freePosition++;
+                prevWordId = currentWordId;
             }
         }
         return finalString;
+    }
+
+    private String getWord(int currentWordId) {
+        String string = new String();
+        for (HashMap.Entry<DictKey, Integer> entry : dictionary.entrySet()) {
+            if (Objects.equals(entry.getValue(), currentWordId)) {
+                while (entry.getKey().key != -1) {
+                    string = (char) entry.getKey().by + string ;
+                    if (dictionary.containsValue(entry.getKey().key)) {
+                        for (HashMap.Entry<DictKey, Integer> entryTwo : dictionary.entrySet()) {
+                            if (Objects.equals(entryTwo.getValue(), entry.getKey().key)) {
+                                entry = entryTwo;
+                            }
+                        }
+                    }
+                }
+                string = (char) entry.getKey().by + string ;
+            }
+        }
+        return string;
+    }
+
+    private int getFirstByte(int currentWordId) {
+        byte by = 0;
+        for (HashMap.Entry<DictKey, Integer> entry : dictionary.entrySet()) {
+            if (Objects.equals(entry.getValue(), currentWordId)) {
+                while (entry.getKey().key != -1) {
+                    if (dictionary.containsValue(entry.getKey().key)) {
+                        for (HashMap.Entry<DictKey, Integer> entryTwo : dictionary.entrySet()) {
+                            if (Objects.equals(entryTwo.getValue(), entry.getKey().key)) {
+                                entry = entryTwo;
+                            }
+                        }
+                    }
+                }
+                by =  entry.getKey().by;
+            }
+        }
+
+        return by;
     }
 
     private void writeFinalString(String finalString) {
@@ -225,3 +264,4 @@ public class LZW {
         }
     }
 }
+
